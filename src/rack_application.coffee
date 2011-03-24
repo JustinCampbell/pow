@@ -37,7 +37,18 @@ module.exports = class RackApplication
   # state.
   constructor: (@configuration, @root) ->
     @logger = @configuration.getLogger join "apps", basename @root
+    @debugLog = @configuration.getLogger "debug"
     @readyCallbacks = []
+
+  debug: (req, message) ->
+    if message
+      message = "[#{req.method} #{req.headers.host} #{req.url}] #{message}"
+    else
+      message = req
+
+    name = "RackApplication"
+    name = "#{name}(#{@state})" if @state
+    @debugLog.debug "#{name} #{message}"
 
   # Invoke `callback` if the application's state is ready. Otherwise,
   # queue the callback to be invoked when the application becomes
@@ -92,13 +103,17 @@ module.exports = class RackApplication
   initialize: ->
     return if @state
     @state = "initializing"
+    @debug "initialize"
 
     # Load the application's environment. If an error is raised or
     # either of the environment scripts exits with a non-zero status,
     # reset the application's state and log the error.
     @loadEnvironment (err, env) =>
+      @debug "loaded environment"
+
       if err
         @state = null
+        @debug "error: #{err.message}"
         @logger.error err.message
         @logger.error "stdout: #{err.stdout}"
         @logger.error "stderr: #{err.stderr}"
@@ -114,6 +129,8 @@ module.exports = class RackApplication
           size: @configuration.workers
           idle: @configuration.timeout
 
+        @debug "nack server created"
+
         #  Log the workers' stderr and stdout, and log each worker's
         #  PID as it spawns and exits.
         bufferLines @server.pool.stdout, (line) => @logger.info line
@@ -128,19 +145,23 @@ module.exports = class RackApplication
       # Invoke and remove all queued callbacks, passing along the
       # error, if any.
       readyCallback err for readyCallback in @readyCallbacks
+      @debug "invoked #{@readyCallbacks.length} ready callbacks"
       @readyCallbacks = []
 
   # Handle an incoming HTTP request. Wait until the application is in
   # the ready state, restart the workers if necessary, then pass the
   # request along to the Nack server.
   handle: (req, res, next, callback) ->
+    @debug req, "handle"
     resume = pause req
+
     @ready (err) =>
       return next err if err
       @restartIfNecessary =>
         req.proxyMetaVariables =
           SERVER_PORT: @configuration.dstPort.toString()
         try
+          @debug req, "passing request to nack"
           @server.handle req, res, next
         finally
           resume()
@@ -149,6 +170,7 @@ module.exports = class RackApplication
   # Terminate any running Nack workers and invoke the given callback
   # when they exit.
   quit: (callback) ->
+    @debug "quit"
     if @state is "ready"
       @server.pool.once "exit", callback if callback
       @server.pool.quit()
@@ -159,8 +181,10 @@ module.exports = class RackApplication
   # modified since the last call to this function, and invoke the
   # given callback when they exit.
   restartIfNecessary: (callback) ->
+    @debug "restartIfNecessary"
     fs.stat join(@root, "tmp/restart.txt"), (err, stats) =>
       if not err and stats?.mtime isnt @mtime
+        @debug "restarting"
         @quit callback
       else
         callback()

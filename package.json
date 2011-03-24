@@ -1,6 +1,6 @@
 { "name": "pow"
 , "description": "Zero-configuration Rack server for Mac OS X"
-, "version": "0.1.6"
+, "version": "0.1.6-debug"
 , "author": "Sam Stephenson"
 , "repository":
   { "type": "git"

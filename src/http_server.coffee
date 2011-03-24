@@ -43,10 +43,19 @@ module.exports = class HttpServer extends connect.HTTPServer
     @rackApplications = {}
 
     @accessLog = @configuration.getLogger "access"
+    @debugLog  = @configuration.getLogger "debug"
 
     @on "close", =>
+      @debug "close"
       for root, application of @rackApplications
         application.quit()
+
+  debug: (req, message) ->
+    if message
+      message = "[#{req.method} #{req.headers.host} #{req.url}] #{message}"
+    else
+      message = req
+    @debugLog.debug "HTTPServer #{message}"
 
   # The first middleware in the stack logs each incoming request's
   # source address, method, hostname, and path to the access log
@@ -62,6 +71,7 @@ module.exports = class HttpServer extends connect.HTTPServer
   # stack. If no application is found, render an error page indicating
   # that the hostname is not yet configured.
   findApplicationRoot: (req, res, next) =>
+    @debug req, "findApplicationRootForHost"
     host   = req.headers.host.replace /:.*/, ""
     resume = pause req
 
@@ -70,6 +80,7 @@ module.exports = class HttpServer extends connect.HTTPServer
         next err
         resume()
       else
+        @debug req, "host: #{host}, root: #{root}"
         req.pow = {host, root}
         if not root
           @handleNonexistentDomain req, res, next
@@ -81,11 +92,8 @@ module.exports = class HttpServer extends connect.HTTPServer
   # If this is a `GET` or `HEAD` request matching a file in the
   # application's `public/` directory, serve the file directly.
   handleStaticRequest: (req, res, next) =>
-    unless req.method in ["GET", "HEAD"]
-      return next()
-
-    unless req.pow
-      return next()
+    return next() unless req.pow and req.method in ["GET", "HEAD"]
+    @debug req, "handleStaticRequest"
 
     root = req.pow.root
     handler = @staticHandlers[root] ?= connect.static join(root, "public")
@@ -100,6 +108,7 @@ module.exports = class HttpServer extends connect.HTTPServer
   # `handleApplicationRequest`.
   findRackApplication: (req, res, next) =>
     return next() unless req.pow
+    @debug req, "findRackApplication"
 
     root = req.pow.root
     exists join(root, "config.ru"), (rackConfigExists) =>
@@ -111,6 +120,7 @@ module.exports = class HttpServer extends connect.HTTPServer
       # `RackApplication` for the root, terminate the application and
       # remove it from the cache.
       else if application = @rackApplications[root]
+        @debug req, "removing existing application from cache"
         delete @rackApplications[root]
         application.quit()
 
@@ -119,7 +129,10 @@ module.exports = class HttpServer extends connect.HTTPServer
   # If the request object is annotated with an application, pass the
   # request off to the application's `handle` method.
   handleApplicationRequest: (req, res, next) =>
+    @debug req, "handleApplicationRequest"
+
     if application = req.pow?.application
+      @debug req, "passing request to application.handle"
       application.handle req, res, next, req.pow.resume
     else
       next()
@@ -128,6 +141,7 @@ module.exports = class HttpServer extends connect.HTTPServer
   # nicely formatted error page along with the full backtrace.
   handleApplicationException: (err, req, res, next) =>
     return next() unless req.pow
+    @debug req, "handleApplicationException: #{err}"
 
     res.writeHead 500, "Content-Type": "text/html; charset=utf8", "X-Pow-Handler": "ApplicationException"
     res.end """
@@ -171,6 +185,8 @@ module.exports = class HttpServer extends connect.HTTPServer
   # set up with Pow yet.
   handleNonexistentDomain: (req, res, next) =>
     return next() unless req.pow
+    @debug req, "handleNonexistentDomain"
+
     host = req.pow.host
     name = host.slice 0, host.length - @configuration.domain.length - 1
     path = join @configuration.root, name
